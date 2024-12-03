@@ -6,6 +6,9 @@
 
 # Agent_Based_SIM 컴파일 방법
 
+## (참고) 정적라이브러리 생성 환경
+* Ubuntu 20.04.3 LTS (cuda 11.4.2 버전 설치) 환경에서 컴파일 생성
+  
 ## 사전 환경
 * cmake 3.14.0 이상 설치 필요
   * centos 7 기준
@@ -80,14 +83,6 @@
 
 # Agent_Based_SIM 실행
 ## 파이썬 스크립트 작성 및 수행
-### 테스트용 파일 참조하여 작성
-* $ cd test/libsalt
-* 파일 편집: test_*.sh, test_*.py
-  * .sh 파일: PYTHONPATH를 로컬 환경에 맞게 수정
-  * .py 파일: uniq_salt_scenario 파일 위치를 로컬 환경에 맞게 수정
-* 시험 수행
-  * $ sh test_simulation.sh     # 예
-  * 시험 수행 전, 필요 시, uniq_salt_scenario 파일 내 시뮬레이션 입력 데이터 파일 확인 (위치, 파일존재 여부 등)
 ### 시뮬레이션 수행용 디폴트 스크립트 사용 (권장)
 * $ cd script
 * 파일 편집
@@ -96,8 +91,3 @@
   * $ sh default.sh
   * 시험 수행 전, 필요 시, 시나리오 파일 내 시뮬레이션 입력 데이터 파일 확인 (위치, 파일존재 여부 등)
 
-# 시험용 TCP 서버(VisServer) 컴파일 및 실행
-## 컴파일
-* $ sh c.sh
-## 실행
-* $ build/VisServer.out
