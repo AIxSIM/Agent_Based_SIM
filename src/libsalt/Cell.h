@@ -22,7 +22,7 @@ namespace libsalt {
 
     public:
         // --------------------------------------------------------------
-        // Getter
+        // Getter for Cell
         // --------------------------------------------------------------
         // cellID = linkID + "_" + section + "_" + Lane;
         static std::vector<LibsaltCell> getValidCellList();
