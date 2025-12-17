@@ -30,7 +30,6 @@ if (Boost_FOUND)
     # link_directories(/usr/local/Cellar/boost/1.67.0_1/lib)
     message(STATUS "Boost_INCLUDE_DIRS: ${Boost_INCLUDE_DIRS}")
     message(STATUS "Boost_LIBRARY_DIRS: ${Boost_FILESYSTEM_LIBRARY}")
-    #    message(STATUS "Boost_VERSION: ${Boost_VERSION}")
 endif()
 
 find_library(SALTLIB NAMES libsaltstatic.a HINTS ../lib/ REQUIRED)
