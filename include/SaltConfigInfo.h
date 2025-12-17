@@ -12,13 +12,6 @@
 
 namespace SALT {
 
-//struct DBConnInfo {
-//    std::string host;
-//    std::string dbname;
-//    std::string user;
-//    std::string passwd;
-//};
-
 struct SaltMasterConfig {
 	//    std::string masterip;
 	int mport;
@@ -29,16 +22,6 @@ struct SaltMasterConfig {
 	//    DBConnInfo dbinfo;
 	//    std::string dbinfo;
 };
-
-//struct SaltWorkerConfig {
-//    std::string masterip;
-//    std::string masterport;
-//    std::string workerport;
-////    int simnumber;
-////    DBConnInfo dbinfo;
-////    std::string dbinfo;
-//};
-
 
 
 class SaltConfigInfo {
