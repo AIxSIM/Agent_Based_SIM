@@ -322,7 +322,27 @@ namespace SALT
         // string VDS_AVG_CAR_TM_15MN;
 
         string VDS_TR_VOL_YMDH;
+        // string VDS_SM_TR_VOL_YMDH;
+        // string VDS_MD_TR_VOL_YMDH;
+        // string VDS_LG_TR_VOL_YMDH;
+        // string VDS_TRVL_SPD_YMDH;
+        // string VDS_TRVL_TM_YMDH;
+        // string VDS_OCCUPY_RATE_YMDH;
+        // string VDS_AVG_CAR_LEN_YMDH;
+        // string VDS_AVG_CAR_TM_YMDH;
 
+        // string SECTN_DELAY_TM;
+        // string BASE_SPD_TM;
+        // string DELAY_TM;
+        // string FREEFLOW_SPD;
+        // string FREEFLOW_TRVL_TM;
+        // string TRVL_TM_95;
+        // string TTI;
+        // string PTI;
+        // string BI;
+
+        // string ETL_TYPE;//*-->
+        // string ETL_DATE;//*-->
     };
     struct vds_weight_info
     {
