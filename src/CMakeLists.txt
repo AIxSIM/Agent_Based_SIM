@@ -79,7 +79,9 @@ SET (libsalt_SRC
         libsalt/VisClient.cpp
         libsalt/VisClient.hpp
         libsalt/Routing.cpp
-        libsalt/Routing.h	
+        libsalt/Routing.h
+        libsalt/Event.cpp
+        libsalt/Event.h
 )
 
 add_library(libsaltstatic STATIC ${libsalt_SRC})
