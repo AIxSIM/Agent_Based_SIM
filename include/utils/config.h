@@ -65,15 +65,23 @@ enum SimulationState{
 };
 
 enum EventState {
-    PASS,
-    RESTRICT,
-    EVACUATION
+    PASS,					// Common Usable
+    RESTRICT,				// Closed (Capacity == 0)
+    EVACUATION,				// Evacuation, Road Usable for evacuation --> Controlled in CellInterface Class
+	CONTROLLED_CAPACITY		// Passable with Controllable Capacity (0 < Capacity <= 2)
+};
+
+enum EventHandleMode {
+	EVENT_START,
+	EVENT_END,
+	EVENT_INTERSECTION,
+	EVENT_INTERSECTION_END
 };
 
 enum RouteSelect {
-    MINTRVTIME,
-    MINTRVDIST,
-    WIDEROAD
+    MINTRVTIME,				// Shortest Time
+    MINTRVDIST,				// Narrow Road
+    WIDEROAD				// Wide Road
 };
 
 #define NO_LIMIT 99999999

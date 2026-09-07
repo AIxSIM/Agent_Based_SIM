@@ -45,6 +45,7 @@ public:
 			SALTTime endStep, VehicleManager* vehicleManagerToFill, NetworkManager* networkManagerToRef);
 
     Result buildEvent(string const& _eventXML, EventManager* eventManagerToFill, NetworkManager* networkManagerToRef);
+	Result buildEventV2(string const& _eventXML, EventManager* eventManagerToFill, NetworkManager* networkManagerToRef);
 
 private:
     //pt::ptree reader;

@@ -22,7 +22,13 @@ namespace libsalt {
     class Simulation {
     public:
         /// @brief load a simulation with the given arguments
-        static void load(std::string argv, std::string outdir_prefix);
+        /// options: 0 - normal simulation (default), 1 - event simulation
+        /// with_router: 0 - no router (default), 1 - with router
+        static void load(std::string argv, std::string outdir_prefix, int options, int with_router);
+        /// @brief load a simulation with the given arguments
+        /// options: 0 - normal simulation (default), 1 - event simulation
+        /// with_router: 0 - no router (default), 1 - with router
+        // static void load_with_options(std::string argv, int options, int with_router);
 
         /// @brief return whether a simulation (network) is present
         static bool isLoaded();
@@ -49,6 +55,8 @@ namespace libsalt {
 
         static SALT::Router* getRouter();
 
+        static SALT::EventManager* getEventManager();
+
         static void printVehicleStatus();
 
     private:
@@ -61,10 +69,13 @@ namespace libsalt {
         static std::string scenarioFile;
         static std::string partitionID;
         static std::string outdirPrefix;
+        // static int eventOption;
+        // static int withRouter;
 
         static void render();
-        static void _load(std::string argv);
-        static void _load(std::string argv, std::string outdir_prefix);
+        static void _load(int with_router);
+        static void _load_with_outdir_prefix(int options);
+        static void _load_with_event_option(int options, int with_router);
 
         /// @brief invalidated standard constructor
         Simulation() = delete;

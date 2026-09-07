@@ -11,6 +11,7 @@
 #include "Vehicle.h"
 #include "Object/Network/Link.h"
 #include "Router/Router.h"
+#include "utils/config.h"
 
 using namespace SALT;
 
@@ -42,7 +43,96 @@ namespace libsalt {
         return nullptr;
     }
 
-    int libsalt::Routing::recalculate_routing_table(std::string excepted) {
+
+    int Routing::get_dua_sec_period() {
+        return _get_config_info().dua_sec_period;
+    }
+
+    int Routing::get_router_time_begin() {
+        return _get_config_info().time_begin;
+    }
+
+    int Routing::get_router_time_end() {
+        return _get_config_info().time_end;
+    }
+
+    SALT::RouteSelect Routing::_match_rs_to_salt_rs(LibsaltRouteSelect rs) {
+        if (rs == LibsaltRouteSelect::MINTRVTIME) {
+            return SALT::RouteSelect::MINTRVTIME;
+        } else if (rs == LibsaltRouteSelect::NARROWROAD) {
+            return SALT::RouteSelect::MINTRVDIST;
+        } else if (rs == LibsaltRouteSelect::WIDEROAD) {
+            return SALT::RouteSelect::WIDEROAD;
+        } else {
+            cout << "Error: Invalid Route Select --> Thus, default to MINTRVTIME" << endl;
+            return SALT::RouteSelect::MINTRVTIME;
+        }
+    }
+
+    SALT::config_info Routing::_get_config_info() {
+        SALT::Router * RT = Simulation::getRouter();
+        return RT->get_routing_config();
+    }
+
+    void Routing::preprocess_for_router() {
+        SALT::SimulationController * SC = Simulation::getSimulationController();
+        SALT::Router * RT = Simulation::getRouter();
+        RT->runData(SC);
+    }
+
+    void Routing::build_init_routing_table() {
+        SALT::SimulationController * SC = Simulation::getSimulationController();
+        SALT::Router * RT = Simulation::getRouter();
+        RT->runDijkstra(SC);
+    }
+
+    void Routing::gen_od_to_trip() {
+        SALT::Router * RT = Simulation::getRouter();
+        RT->runOD2Trips();
+    }
+
+    void Routing::allocate_init_routes(const int _curstep) {
+        SALT::Router * RT = Simulation::getRouter();
+        SALT::SALTTime curstep = (SALT::SALTTime)_curstep;
+        RT->runRouter(curstep);
+    }
+
+    void Routing::allocate_inter_routes(const int _curstep, bool write_file) {
+        SALT::SimulationController * SC = Simulation::getSimulationController();
+        SALT::Router * RT = Simulation::getRouter();
+        SALT::SALTTime curstep = (SALT::SALTTime)_curstep;
+        RT->MPduaRouter(curstep, SC, write_file);
+    }
+
+    void Routing::rebuild_routing_table() {
+        SALT::SimulationController * SC = Simulation::getSimulationController();
+        SALT::Router * RT = Simulation::getRouter();
+        RT->runDijkstra(SC);
+    }
+
+    void Routing::write_file_route_xml_completed() {
+        SALT::SimulationController * SC = Simulation::getSimulationController();
+        SALT::Router * RT = Simulation::getRouter();
+        RT->write_file_route_xml_completed(SC);
+    }
+
+    int Routing::make_routing_table(LibsaltRouteSelect rs) {
+        int ret = 1;
+        SALT::Router * RT = Simulation::getRouter();
+        auto links = Simulation::getSimulationController()->getLinkList();
+        SALT::RouteSelect RS = _match_rs_to_salt_rs(rs);
+        ret = RT->make_routing_table(links, RS);
+        return ret;
+    }
+
+    void Routing::update_routing_table(LibsaltRouteSelect rs) {
+        SALT::SimulationController * SC = Simulation::getSimulationController();
+        SALT::Router * RT = Simulation::getRouter();
+        SALT::RouteSelect RS = _match_rs_to_salt_rs(rs);
+        RT->update_routing_table(SC, RS);
+    }
+
+    int libsalt::Routing::recalculate_routing_table(std::string excepted, LibsaltRouteSelect rs) {
         int ret = 1;
         SALT::Router * RT = Simulation::getRouter();
         std::vector<std::string> excepted_links;
@@ -70,7 +160,9 @@ namespace libsalt {
                 RT->set_mapGraphID2IDX(links[k]->getID(), k);
             }
             cout << "[Recalculate Routing Table]" << endl;
-            RT->make_routing_table(links);
+            //RT->make_routing_table(links);
+            SALT::RouteSelect RS = _match_rs_to_salt_rs(rs);;
+            RT->make_routing_table(links, RS);
         } else {
             ret = 0;
         }
@@ -91,8 +183,5 @@ namespace libsalt {
             return 0;
         }
     }
-
-
-
 
 }

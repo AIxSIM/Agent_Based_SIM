@@ -272,6 +272,52 @@ namespace libsalt {
         return nullptr;
     }
 
+    LibsaltRouteSelect Vehicle::getRouteSelectPref(const std::string &vehicleID) {
+        SALT::VehicleInterface* vehicle = getVehicle(vehicleID);
+        if (vehicle != nullptr) {
+            return _match_salt_rs_to_rs(vehicle->getMyRSPreference());
+        } else {
+            cout << "Error: Vehicle not found --> [return MINTRVTIME (default value)]" << endl;
+            return LibsaltRouteSelect::MINTRVTIME;
+        }
+
+    }
+
+    void Vehicle::setRouteSelectPref(const std::string &vehicleID, LibsaltRouteSelect rs) {
+        SALT::VehicleInterface* vehicle = getVehicle(vehicleID);
+        if (vehicle != nullptr) {
+            vehicle->setMyRSPreference(_match_rs_to_salt_rs(rs));
+        } else {
+            cout << "Error: Vehicle not found --> [return MINTRVTIME (default value)]" << endl;
+        }
+    }
+
+    SALT::RouteSelect Vehicle::_match_rs_to_salt_rs(LibsaltRouteSelect rs) {
+        if (rs == LibsaltRouteSelect::MINTRVTIME) {
+            return SALT::RouteSelect::MINTRVTIME;
+        } else if (rs == LibsaltRouteSelect::NARROWROAD) {
+            return SALT::RouteSelect::MINTRVDIST;
+        } else if (rs == LibsaltRouteSelect::WIDEROAD) {
+            return SALT::RouteSelect::WIDEROAD;
+        } else {
+            cout << "Error: Invalid Route Select --> Thus, default to MINTRVTIME" << endl;
+            return SALT::RouteSelect::MINTRVTIME;
+        }
+    }
+
+    LibsaltRouteSelect Vehicle::_match_salt_rs_to_rs(SALT::RouteSelect rs) {
+        if (rs == SALT::RouteSelect::MINTRVTIME) {
+            return LibsaltRouteSelect::MINTRVTIME;
+        } else if (rs == SALT::RouteSelect::MINTRVDIST) {
+            return LibsaltRouteSelect::NARROWROAD;
+        } else if (rs == SALT::RouteSelect::WIDEROAD) {
+            return LibsaltRouteSelect::WIDEROAD;
+        } else {
+            cout << "Error: Invalid Route Select --> Thus, default to MINTRVTIME" << endl;
+            return LibsaltRouteSelect::MINTRVTIME;
+        }
+    }
+
     // ===========================================================================
     // Setter Implementation
     // ===========================================================================

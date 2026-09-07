@@ -21,6 +21,11 @@
 #include <Object/TrafficSignal/TrafficSignal.h>
 #include <Object/TrafficSignal/TrafficSignalSchedule.h>
 #include <Router/Router.h>
+#include <Event/EventAttribute_LinkAccessControl.h>
+#include <Event/EventInterface.h>
+
+// #define enum_class_fix
+
 
 // ===========================================================================
 // class and type definitions
@@ -29,6 +34,32 @@ namespace libsalt {
 
     const double INVALID_DOUBLE_VALUE = -1073741824.0;
     const int INVALID_INT_VALUE = -1073741824;
+
+/**
+ * @class LibsaltRouteSelect
+ */
+
+    enum class LibsaltRouteSelect {
+        MINTRVTIME,
+        NARROWROAD,
+        WIDEROAD
+    };
+
+    enum class LibsaltEventState {
+        PASS,					// Common Usable
+        RESTRICT,				// Closed (Capacity == 0)
+        EVACUATION,				// Evacuation, Road Usable for evacuation --> Controlled in CellInterface Class
+        CONTROLLED_CAPACITY		// Passable with Controllable Capacity (0 < Capacity <= 2)
+    };
+
+    // enum LibsaltEventHandleMode {
+    //     EVENT_START,
+    //     EVENT_END,
+    //     EVENT_INTERSECTION,
+    //     EVENT_INTERSECTION_END
+    // };
+
+
 
 /**
  * @class LibsaltException
@@ -120,6 +151,7 @@ typedef std::map<int, std::shared_ptr<LibsaltResult> > LibsaltResults;
 
 }
 
+
 #ifdef SWIG
 %template(TLSPhaseVector) std::vector<std::pair<int,std::string>>;
 %template(TLSPhasePair) std::pair<int,std::string>;
@@ -168,6 +200,13 @@ namespace libsalt{
 %template(LibsaltCellVector) std::vector<libsalt::LibsaltCell>;
 %template(LibsaltConnectionVector) std::vector<libsalt::LibsaltConnection>;
 %template(LibsaltVehicleVector) std::vector<libsalt::LibsaltVehicle>;
+%template(LibsaltEventVector) std::vector<libsalt::LibsaltEvent>;
+%template(LibsaltEventMap) std::map<int, std::vector<libsalt::LibsaltEvent>>;
+%template(LibsaltEventVectorV2) std::vector<libsalt::LibsaltEventV2>;
+%template(LibsaltEventPair) std::pair<int, libsalt::LibsaltEventV2>;
+%template(LibsaltEventDeque) std::deque<std::pair<int, libsalt::LibsaltEventV2>>;
+%template(LibsaltEventMapV2) std::map<int,std::deque<std::pair<int, libsalt::LibsaltEventV2>>>;
+
 #endif
 
 
@@ -429,6 +468,8 @@ namespace libsalt {
             cellIndex = v->getMyCellIndex();
             length = v->getMyLength();
             route = v->getRouteString();
+            rsPref = _match_salt_rs_to_rs(v->getMyRSPreference());
+
         }
         ~LibsaltVehicle() {}
 
@@ -440,6 +481,7 @@ namespace libsalt {
         int cellIndex;
         float length;
         std::string route;
+        LibsaltRouteSelect rsPref;
 
         int routeIndex;
 
@@ -447,6 +489,169 @@ namespace libsalt {
             std::ostringstream os;
             os << "LibsaltVehicle(id=" << id << ", vClass=" << vClass << ", cellIndex=" << cellIndex << ", length=" << length << ", departTime=" << departTime << ", speed=" << speed << ", shape=" << shape << ", route=" << route << ")";
             return os.str();
+        }
+
+        LibsaltRouteSelect _match_salt_rs_to_rs(SALT::RouteSelect rs) {
+            if (rs == SALT::RouteSelect::MINTRVTIME) {
+                return LibsaltRouteSelect::MINTRVTIME;
+            } else if (rs == SALT::RouteSelect::MINTRVDIST) {
+                return LibsaltRouteSelect::NARROWROAD;
+            } else if (rs == SALT::RouteSelect::WIDEROAD) {
+                return LibsaltRouteSelect::WIDEROAD;
+            } else {
+                cout << "Error: Invalid Route Select --> Thus, default to MINTRVTIME" << endl;
+                return LibsaltRouteSelect::MINTRVTIME;
+            }
+        }
+    };
+
+    class LibsaltEvent {
+    public:
+        LibsaltEvent() {}
+        // LibsaltEvent(SALT::EventAttribute_LinkAccessControl* attr) {
+        //     myEventID = attr->getEventID();
+        //     myLinkIDs = attr->getMyLinkIDs();
+        //     myEnterLinkIDs = attr->getEnterLinkIDs();
+        //     additional=attr->getAdditional();
+        //     myUniDirLinkIDs = attr->getUniDirLinkIDs();
+        //     myUniDirOppLinkIDs = attr->getUniDirOppLinkIDs();
+        //     capacity_option = attr->getCapacityOption();
+        //     myBegin = attr->getEventBegin();
+        //     myEnd = attr->getEventEnd();
+        // }
+        LibsaltEvent(SALT::EventInterface* attr) {
+            myEventID = attr->getEventID();
+            myLinkIDs = attr->getMyLinkIDs();
+            myEnterLinkIDs = attr->getEnterLinkIDs();
+            additional=attr->getAdditional();
+            myUniDirLinkIDs = attr->getUniDirLinkIDs();
+            myUniDirOppLinkIDs = attr->getUniDirOppLinkIDs();
+            capacity_option = attr->getCapacityOption();
+            myBegin = attr->getEventBegin();
+            myEnd = attr->getEventEnd();
+        }
+
+        ~LibsaltEvent() {}
+
+        std::string myEventID;
+        std::vector<std::string> myLinkIDs;
+        std::vector<std::string> myEnterLinkIDs;
+
+        // Additional Event Description --> Uni-Direction-Restrict
+        bool additional=false;
+        std::vector<std::string> myUniDirLinkIDs;
+        std::vector<std::string> myUniDirOppLinkIDs;
+        double capacity_option = 1.0;
+
+        int myBegin=0;
+        int myEnd=0;
+
+        std::string toString() {
+            std::ostringstream os;
+            os << "LibsaltEvent(id=" << myEventID << ", myBegin=" << myBegin << ", myEnd=" << myEnd << ", additional=" << additional << ", # of myLinkIDs=" << myLinkIDs.size() << ", # of myEnterLinkIDs=" << myEnterLinkIDs.size() <<
+                ", # of myUniDirLinkIDs=" << myUniDirLinkIDs.size() << ", # of myUniDirOppLinkIDs=" << myUniDirOppLinkIDs.size() << ", capacity_option=" << capacity_option <<  ")";
+            return os.str();
+        }
+    };
+
+    class LibsaltEventV2 {
+    public:
+        LibsaltEventV2() {}
+        // LibsaltEvent(SALT::EventAttribute_LinkAccessControl* attr) {
+        //     myEventID = attr->getEventID();
+        //     myLinkIDs = attr->getMyLinkIDs();
+        //     myEnterLinkIDs = attr->getEnterLinkIDs();
+        //     additional=attr->getAdditional();
+        //     myUniDirLinkIDs = attr->getUniDirLinkIDs();
+        //     myUniDirOppLinkIDs = attr->getUniDirOppLinkIDs();
+        //     capacity_option = attr->getCapacityOption();
+        //     myBegin = attr->getEventBegin();
+        //     myEnd = attr->getEventEnd();
+        // }
+        LibsaltEventV2(SALT::EventInterface* attr) {
+            myEventID = attr->getEventID();
+            // myLinkIDs = attr->getMyLinkIDs();
+            // myEnterLinkIDs = attr->getEnterLinkIDs();
+            // additional=attr->getAdditional();
+            // myUniDirLinkIDs = attr->getUniDirLinkIDs();
+            // myUniDirOppLinkIDs = attr->getUniDirOppLinkIDs();
+            // capacity_option = attr->getCapacityOption();
+            myBegin = attr->getEventBegin();
+            myEnd = attr->getEventEnd();
+            setMyTargets(attr->getTargets());
+            setMyTargetLinks(attr->getTargetLinks());
+        }
+
+        ~LibsaltEventV2() {}
+
+        std::string myEventID;
+        // std::vector<std::string> myLinkIDs;
+        // std::vector<std::string> myEnterLinkIDs;
+
+        std::map<std::string, tuple<LibsaltEventState, float, std::vector<std::string>>> myTargets;
+        std::map<std::string, std::pair<LibsaltEventState, float>> myTargetLinks;
+        std::map<std::string, std::pair<LibsaltEventState, float>> myIntersectionTargetLinks;
+
+        // Additional Event Description --> Uni-Direction-Restrict
+        // bool additional=false;
+        // std::vector<std::string> myUniDirLinkIDs;
+        // std::vector<std::string> myUniDirOppLinkIDs;
+        // double capacity_option = 1.0;
+
+        int myBegin=0;
+        int myEnd=0;
+
+        std::string toString() {
+            std::ostringstream os;
+            os << "LibsaltEvent(id=" << myEventID << ", myBegin=" << myBegin << ", myEnd=" << myEnd <<
+                ", # of myTargets==" << myTargets.size() <<", # of myTargetLinks==" << myTargetLinks.size() << ")";
+            return os.str();
+        }
+
+        void setMyTargets(std::map<std::string, tuple<SALT::EventState, float, std::vector<std::string>>> _targets) {
+            for (auto it = _targets.begin(); it != _targets.end(); ++it) {
+                std::string targetID = it->first;
+                tuple<SALT::EventState, float, std::vector<std::string>> target = it->second;
+                LibsaltEventState state = _match_salt_es_to_es(std::get<0>(target));
+                float capacity = std::get<1>(target);
+                std::vector<std::string> targetLinkIDs = std::get<2>(target);
+                myTargets[targetID] = std::make_tuple(state, capacity, targetLinkIDs);
+            }
+        }
+
+        void setMyTargetLinks(std::map<std::string, std::pair<SALT::EventState, float>> _targets) {
+            for (auto it = _targets.begin(); it != _targets.end(); ++it) {
+                std::string linkID = it->first;
+                std::pair<SALT::EventState, float> target = it->second;
+                LibsaltEventState state = _match_salt_es_to_es(target.first);
+                float capacity = target.second;
+                myTargetLinks[linkID] = std::make_pair(state, capacity);
+            }
+        }
+
+        void setIntersectionTargetLinks(std::map<std::string, std::pair<SALT::EventState, float>> _targets) {
+            for (auto it = _targets.begin(); it != _targets.end(); ++it) {
+                std::string linkID = it->first;
+                std::pair<SALT::EventState, float> target = it->second;
+                LibsaltEventState state = _match_salt_es_to_es(target.first);
+                float capacity = target.second;
+                myIntersectionTargetLinks[linkID] = std::make_pair(state, capacity);
+            }
+        }
+
+        LibsaltEventState _match_salt_es_to_es(SALT::EventState es) {
+            if (es == SALT::EventState::PASS) {
+                return LibsaltEventState::PASS;
+            } else if (es == SALT::EventState::EVACUATION) {
+                return LibsaltEventState::EVACUATION;
+            } else if (es == SALT::EventState::RESTRICT) {
+                return LibsaltEventState::RESTRICT;
+            } else if (es == SALT::EventState::CONTROLLED_CAPACITY) {
+                return LibsaltEventState::CONTROLLED_CAPACITY;
+            } else {
+                cout << "Error: Invalid Route Select --> Thus, default to PASS" << endl;
+                return LibsaltEventState::PASS;
+            }
         }
     };
 } // end of namespace libsalt

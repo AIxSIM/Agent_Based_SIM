@@ -226,6 +226,8 @@ public:
         this->myEventACState = state;
     }
 
+    void setMyEventControlledCapacity(double capacity);
+
 protected:
 
 //	#define DEBUG
@@ -261,7 +263,10 @@ public:
 	
 	bool myOutFlowCellFlag = false; // myLastSectionFlag and myLink->isOutflowLink()
 
-	bool myPocketFlag = false;
+	bool myPocketFlag = false;    // left of right pocket cell, the capacity is double
+
+    bool myEventControlledCapFlag = false;    // Under Uni-Direction-Restrict Event, opposite link's capacity is multiplied
+    double myEventControlledCapacity = 1.0;
 
     EventState myEventACState = PASS;
 

@@ -76,6 +76,13 @@ namespace libsalt {
 
         static std::string getCurrentRemaningRoutes(const std::string& vehicleID);
         static std::string getLastLinkID(const std::string& vehicleID);
+
+        static LibsaltRouteSelect getRouteSelectPref(const std::string& vehicleID);
+        static void setRouteSelectPref(const std::string& vehicleID, LibsaltRouteSelect rs);
+
+    private:
+        static SALT::RouteSelect _match_rs_to_salt_rs(LibsaltRouteSelect rs);
+        static LibsaltRouteSelect _match_salt_rs_to_rs(SALT::RouteSelect rs);
     };
 
 } // end of namespace

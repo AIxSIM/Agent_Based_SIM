@@ -64,6 +64,13 @@ namespace libsalt {
         static LibsaltPosition getDirection(const std::string& linkID);
         static int getLeftPocket(const std::string& linkID);
         static int getRightPocket(const std::string& linkID);
+
+        static LibsaltEventState getACState(const std::string& linkID);
+        static void setACState(const std::string& linkID, LibsaltEventState es);
+
+    private:
+        static SALT::EventState _match_es_to_salt_es(LibsaltEventState es);
+        static LibsaltEventState _match_salt_es_to_es(SALT::EventState es);
     }; // End of class Link
 
 } // End of namespace libsalt

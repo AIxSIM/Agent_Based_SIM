@@ -60,25 +60,8 @@ namespace SALT
     //    WIDEROAD
     //};
 
-
-    // LINK_TYPE : 대피 지역 정보 + 진입 링크 (차량 통제)
-    // -----------------------------------------------
-    // EVACUATION : 대피 지역 내 링크, 그대로 운행
-    // RESTRICT : 대피 지역으로 진입 링크, 링크 통제 값 수준으로 조정
-    // PASS : 그 외 지역, 그대로 운행
-    //enum EventState {
-    //    PASS,
-    //    RESTRICT,
-    //    EVACUATION
-    //};
-
     enum class RoterInputType {UNKN, OD, TRIP, ROUTE};//2025
     enum class RoterOutputType {UNKN, TRIP, ROUTE};//2025
-
-
-
-
-
 
     struct config_info
     {
@@ -119,6 +102,7 @@ namespace SALT
 
         string taz_edges_event;//2025
         string od_matrix_event;//2025
+        string trip_event_received;
 
         string router_begin_input;//2025
         string router_end_output;//2025
@@ -144,6 +128,7 @@ namespace SALT
         string to;
         string via;
         string vehicleClass; //2025
+        string algorithm; //2025
     };
     struct path_info
     {
@@ -372,7 +357,8 @@ namespace SALT
         int HHmmssDiffSeconds(const std::string& start, const std::string& end);
         int HHmmToSeconds(const std::string& timeStr);
         int HHmmDiffSeconds(const std::string& start, const std::string& end);
-        static int COMP_BY_TRIP_INFO_departtime(const trip_info &x, const trip_info &y);
+        static bool COMP_BY_TRIP_INFO_departtime(const trip_info &x, const trip_info &y);
+        static bool cmp_departtime(const trip_info &a, const trip_info &b);
         static bool COMP_BY_OD_RAW_TARGET(const od_raw_info &x, const od_raw_info &y);
         static bool COMP_BY_VDS_RAW_TARGET(const vds_raw_info &x, const vds_raw_info &y);
         vector<string> split(string input, char dlim);
@@ -403,7 +389,7 @@ namespace SALT
         void get_od_matrix(string path);
         void get_vds_raw_dj(string path_r, string path_w);
         void get_vds_raw_sj(string vdsr_dir, string path_w);
-        void get_vds_raw_kjuj(string path_r, string path_w);
+        void get_vds_raw_kjuj(string path_r, string path_w);     //2025
         void get_vds_raw_target(string path_r);
         void make_vds_table(string path_w);
         void make_vds_weight_day_avg(string day);
@@ -448,6 +434,7 @@ namespace SALT
         void set_mapGraph(SALT::Link *_link, int pos) {mapGraph[_link] = pos;}
         void set_mapGraphToLink(int pos, SALT::Link *_link) {mapGraphToLink[pos] = _link;}
         void set_mapGraphID2IDX(string id, int pos) {mapGraphID2IDX[id] = pos;}
+        void set_num_vertices(int _num_v) { num_vertices = _num_v; }
 
 
         void runSetUp(int argc, char **argv, SALT::SimulationController *sc);
@@ -459,7 +446,8 @@ namespace SALT
 
         void read_file_taz_edges_event_csv(string path); //2025
         void read_file_od_matrix_event_csv(string path); //2025
-        void runOD2Trips_event();//2025
+        void read_file_trips_event_received(); //2025 //vector<trip_info> trips_info_event_received; // 2025 제공 생성방식
+        void runOD2Trips_event();//2025 //vector<trip_info> trips_info_event;// 2025 --> 즉시 생성방식
 
         void runRouter(int currentStep);// 2025
 
@@ -473,9 +461,14 @@ namespace SALT
         void replaceCurrentRoutesWithPreference(vector<VehicleInterface*> ChangeList, SALT::SimulationController *sc); //2025
         void MPduaRouter(int currentStep, SALT::SimulationController *sc, bool write); //2025
 
+        void update_routing_table(SimulationController *sc, SALT::RouteSelect rs);
+
+        config_info get_routing_config() { return routing_config; }
+        void set_global_path(string path) { Global_Path = path; }
+
         //--------------> GLOBAL VRIABLES
-        const int INF = INT_MAX;
-        const int RESTRICT =  999999999;
+        const int INF = INT_MAX; //2147483647
+        const int RESTRICT_VALUE =  999999999;
         RouteSelect DEFAULT_RS = MINTRVTIME;
 
         string Global_Path;
@@ -487,7 +480,8 @@ namespace SALT
 
         map<RouteSelect, vector<trip_info>> MAP_trips_info;// 2025
         vector<trip_info> trips_info;// 2025
-        vector<trip_info> trips_info_event;// 2025
+        vector<trip_info> trips_info_event;// 2025 --> 즉시 생성방식
+        vector<trip_info> trips_info_event_received; // 2025 제공 생성방식
 
         map<RouteSelect, vector<dua_statistics_info>> dua_statistics;
         string day_target;

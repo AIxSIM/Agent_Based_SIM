@@ -1,4 +1,11 @@
 #include <iostream>
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <iomanip>
+#include <set>
+#include <thread>
+#include <unordered_map>
 #include <boost/bind.hpp>
 #include <boost/smart_ptr.hpp>
 #include <boost/asio.hpp>
@@ -11,6 +18,7 @@
 #include "Link.h"
 #include "Cell.h"
 #include "Vehicle.h"
+#include "Simulation.h"
 #include "VisMsg.h"
 
 using boost::asio::ip::tcp;
@@ -21,6 +29,11 @@ namespace libsalt {
      * Constructor.
      */
     VisClient::VisClient(SALT::SimulationController* SC_, std::string& remoteHost_, int remotePort_) : SC(SC_), remoteHost(remoteHost_), remotePort(remotePort_), socket(io), strand(io) {
+        std::cout << std::fixed << std::setprecision(6)
+                  << "[DefaultView] roadType=cell, extend="
+                  << minx << "," << miny << " " << maxx << "," << maxy
+                  << std::endl;
+
         statusTimer = new boost::asio::deadline_timer(io, boost::posix_time::seconds(statusSleepTime));
         statusTimer->async_wait(strand.wrap(boost::bind(&VisClient::sendStatusMessage, this, boost::asio::placeholders::error)));
 
@@ -105,13 +118,17 @@ namespace libsalt {
                 const floatArray *extendPtr = reinterpret_cast<floatArray *>(&buf[0]);
                 auto extend = *extendPtr;
                 const VisRoadType *roadTypePtr = reinterpret_cast<VisRoadType *>(&buf[sizeof(float) * EXTEND_LENGTH]);
-                roadType = *roadTypePtr;
+                {
+                    std::lock_guard<std::mutex> lock(viewStateMutex);
+                    roadType = *roadTypePtr;
 
-                // Decode geometries of zoom area
-                minx = extend[0];
-                miny = extend[1];
-                maxx = extend[2];
-                maxy = extend[3];
+                    // Decode geometries of zoom area
+                    minx = extend[0];
+                    miny = extend[1];
+                    maxx = extend[2];
+                    maxy = extend[3];
+                    viewRevision.fetch_add(1);
+                }
 
                 std::string roadTypeStr = "cell";
                 if (*roadTypePtr == LINK) {
@@ -120,7 +137,9 @@ namespace libsalt {
 
                 std::string extendStr =
                         to_string(minx) + "," + to_string(miny) + " " + to_string(maxx) + "," + to_string(maxy);
-                cout << "[SetMsg] timestamp=" << timestamp << ", bodySize=" << bodySize << ", roadType=" << roadTypeStr << ", extend=" << extendStr << std::endl;
+                cout << std::fixed << std::setprecision(0)
+                     << "[SetMsg] timestamp=" << timestamp << ", bodySize=" << bodySize
+                     << ", roadType=" << roadTypeStr << ", extend=" << extendStr << std::endl;
 
             } else if (MSG_STOP == header->type) {
                 // std::cout << __FUNCTION__ << "() Received STOP message, type=" << header->type<< std::endl;
@@ -215,22 +234,21 @@ namespace libsalt {
             msg.header.type = MSG_INIT;
 
             const auto p1 = std::chrono::system_clock::now();
-            long timestamp = std::chrono::duration_cast<std::chrono::seconds>(p1.time_since_epoch()).count();
+            long timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                    p1.time_since_epoch()).count();
             msg.header.timestamp = timestamp;
 
-            strncpy(msg.simulationId, SC->getSimID().c_str(), MAX_SIMULATION_ID);
+            std::memset(msg.simulationId, 0, sizeof(msg.simulationId));
+            //std::strncpy(msg.simulationId, SC->getSimID().c_str(), sizeof(msg.simulationId) - 1);
+            std::strncpy(msg.simulationId, SC->getSimID().c_str(), MAX_SIMULATION_ID);
             msg.header.bodySize = sizeof(msg.simulationId);
 
             // std::cout << "[InitMsg] timestamp=" << msg.header.timestamp << ", simulationId=[" << msg.simulationId << "]" << std::endl;
-            std::cout << "[InitMsg] timestamp=" << msg.header.timestamp << ", simulationId=[" << SC->getSimID() << "]" << std::endl;
+            std::cout << std::fixed << std::setprecision(0)
+                      << "[InitMsg] timestamp=" << msg.header.timestamp
+                      << ", simulationId=[" << std::string(msg.simulationId, sizeof(msg.simulationId)) << "]" << std::endl;
 
-            std::vector<boost::asio::const_buffer> buffers;
-            buffers.push_back(boost::asio::buffer(&msg, sizeof(MsgHeader) + msg.header.bodySize));
-
-            boost::asio::async_write(socket, buffers,
-                                     boost::bind(&VisClient::handleWrite, this,
-                                                 boost::asio::placeholders::error,
-                                                 boost::asio::placeholders::bytes_transferred, buffers));
+            enqueueWrite(&msg, sizeof(MsgHeader) + msg.header.bodySize);
         }
     }
 
@@ -245,6 +263,80 @@ namespace libsalt {
 
         vector<std::string> result { begin(tokens), end(tokens) };
         return result;
+    }
+
+    /**
+     * Rebuild the visible-road cache for the latest SET viewport.
+     *
+     * This method is intentionally called from the DataMsg/simulation thread,
+     * not from the asynchronous SET handler. Geometry is parsed once per SET
+     * revision and is not reparsed for every DataMsg.
+     */
+    void VisClient::rebuildVisibleRoadCache(VisRoadType currentRoadType,
+                                            float currentMinx,
+                                            float currentMiny,
+                                            float currentMaxx,
+                                            float currentMaxy,
+                                            unsigned long long currentViewRevision) {
+        const auto cacheStart = std::chrono::steady_clock::now();
+
+        visibleLinks.clear();
+        visibleCells.clear();
+
+        if (currentRoadType == VisRoadType::LINK) {
+            const std::vector<SALT::Link*> links = SC->getLinkList();
+            visibleLinks.reserve(links.size());
+
+            for (SALT::Link* link : links) {
+                std::vector<std::string> shapes;
+                boost::split(shapes, link->getShape(), boost::is_any_of(" ,"));
+                if (shapes.size() < 4) {
+                    continue;
+                }
+
+                const float roadMinx = boost::lexical_cast<float>(shapes[0]);
+                const float roadMiny = boost::lexical_cast<float>(shapes[1]);
+                const float roadMaxx = boost::lexical_cast<float>(shapes[shapes.size() - 2]);
+                const float roadMaxy = boost::lexical_cast<float>(shapes[shapes.size() - 1]);
+
+                if ((roadMinx >= currentMinx) && (roadMiny <= currentMiny) &&
+                    (roadMaxx <= currentMaxx) && (roadMaxy > currentMaxy)) {
+                    visibleLinks.push_back(link);
+                }
+            }
+        } else {
+            const std::vector<SALT::CellInterface*> cells = SC->getCellList();
+            visibleCells.reserve(cells.size());
+
+            for (SALT::CellInterface* cell : cells) {
+                std::vector<std::string> shapes;
+                boost::split(shapes, cell->getMyLink()->getShape(), boost::is_any_of(" ,"));
+                if (shapes.size() < 4) {
+                    continue;
+                }
+
+                const float roadMinx = boost::lexical_cast<float>(shapes[0]);
+                const float roadMiny = boost::lexical_cast<float>(shapes[1]);
+                const float roadMaxx = boost::lexical_cast<float>(shapes[shapes.size() - 2]);
+                const float roadMaxy = boost::lexical_cast<float>(shapes[shapes.size() - 1]);
+
+                if ((roadMinx >= currentMinx) && (roadMiny <= currentMiny) &&
+                    (roadMaxx <= currentMaxx) && (roadMaxy >= currentMaxy)) {
+                    visibleCells.push_back(cell);
+                }
+            }
+        }
+
+        cachedViewRevision = currentViewRevision;
+
+        const std::chrono::duration<double> cacheElapsed =
+                std::chrono::steady_clock::now() - cacheStart;
+        std::cout << "[ViewCache] revision=" << cachedViewRevision
+                  << ", roadType=" << currentRoadType
+                  << ", visibleLinks=" << visibleLinks.size()
+                  << ", visibleCells=" << visibleCells.size()
+                  << ", rebuildTime=" << std::fixed << std::setprecision(6)
+                  << cacheElapsed.count() << " sec" << std::endl;
     }
 
     /**
@@ -275,57 +367,105 @@ namespace libsalt {
     }
 
     void VisClient::sendDataMessageInternal() {
+        bool expected = false;
+        if (!dataMessageRunning.compare_exchange_strong(expected, true)) {
+            std::cerr << "[DataMsg] skipped: previous construction is still running" << std::endl;
+            return;
+        }
+
+        struct RunningGuard {
+            std::atomic<bool>& flag;
+            ~RunningGuard() { flag.store(false); }
+        } runningGuard { dataMessageRunning };
+
+        const auto perfStart = std::chrono::steady_clock::now();
+
         if (status == VisClientState::RUNNING) {
 
+            VisRoadType currentRoadType;
+            float currentMinx;
+            float currentMiny;
+            float currentMaxx;
+            float currentMaxy;
+            unsigned long long currentViewRevision;
+            {
+                std::lock_guard<std::mutex> lock(viewStateMutex);
+                currentRoadType = roadType;
+                currentMinx = minx;
+                currentMiny = miny;
+                currentMaxx = maxx;
+                currentMaxy = maxy;
+                currentViewRevision = viewRevision.load();
+            }
+
+            if (cachedViewRevision != currentViewRevision) {
+                rebuildVisibleRoadCache(currentRoadType,
+                                        currentMinx,
+                                        currentMiny,
+                                        currentMaxx,
+                                        currentMaxy,
+                                        currentViewRevision);
+            }
+
             unsigned int msgSize = 0;
-            unsigned int roadsSize = 0;
 
             DataMsg msg = DataMsg();
             msg.header = MsgHeader();
             msg.header.type = MSG_DATA;
 
             const auto p1 = std::chrono::system_clock::now();
-            long timestamp = std::chrono::duration_cast<std::chrono::seconds>(p1.time_since_epoch()).count();
+            long timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                    p1.time_since_epoch()).count();
             msg.header.timestamp = timestamp;
 
             msgSize += sizeof(MsgHeader);
 
             int numRoads = 0;
-            std::vector<Road> roads;
-            if (roadType == VisRoadType::LINK) {
-                std::vector<SALT::Link *> links = SC->getLinkList();
-                for (auto link : links) {
+            unsigned int truncatedClassRoads = 0;
+            unsigned int maxVehiclesOnRoad = 0;
+            std::string maxVehiclesRoadId;
+            double getVehiclesSeconds = 0.0;
+            double averageSpeedSeconds = 0.0;
+            unsigned int missingVehicleIndexCount = 0;
+
+            // Build a fresh index for this DataMsg. The simulation step is
+            // blocked while this function runs, so these pointers remain
+            // valid for the lifetime of the local index. Rebuilding on every
+            // DataMsg automatically includes newly departed vehicles and
+            // excludes vehicles no longer in the running set.
+            const auto vehicleIndexStart = std::chrono::steady_clock::now();
+            const std::set<SALT::VehicleInterface*> runningVehicles =
+                    Simulation::getVehicleManager()->getRunningSet();
+            std::unordered_map<std::string, SALT::VehicleInterface*> runningVehicleIndex;
+            runningVehicleIndex.reserve(runningVehicles.size());
+            for (SALT::VehicleInterface* vehicle : runningVehicles) {
+                if (vehicle != nullptr) {
+                    runningVehicleIndex.emplace(vehicle->getMyName(), vehicle);
+                }
+            }
+            const double vehicleIndexSeconds = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - vehicleIndexStart).count();
+
+            if (currentRoadType == VisRoadType::LINK) {
+                for (SALT::Link* link : visibleLinks) {
+                    const auto vehiclesStart = std::chrono::steady_clock::now();
                     std::vector<std::string> vehicles = link->getVehicles();
+                    getVehiclesSeconds += std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - vehiclesStart).count();
                     int numVehicles = vehicles.size();
                     if (numVehicles == 0) {
                         continue;
                     }
-
-                    // Get visualization geometry
-                    float road_minx, road_miny, road_maxx, road_maxy;
-                    {
-                        std::vector<std::string> shapes;
-                        // link's shape = myFromNode->getShape() + " " + myToNode->getShape();
-                        // node's shape = std::to_string(x) + "," + std::to_string(y);
-                        std::string shapeStr = link->getShape();
-                        std::string delimiters(" ,"); // space and comma
-                        boost::split(shapes, shapeStr, boost::is_any_of(delimiters));
-
-                        // std::cout << shapes[0] << "|" << shapes[1] << "|" << shapes[shapes.size()-2] << "|" << shapes[shapes.size()-1] << std::endl;
-                        road_minx = boost::lexical_cast<float>(shapes[0]);
-                        road_miny = boost::lexical_cast<float>(shapes[1]);
-                        road_maxx = boost::lexical_cast<float>(shapes[shapes.size() - 2]);
-                        road_maxy = boost::lexical_cast<float>(shapes[shapes.size() - 1]);
-                        //std::cout << "shape=" << link->getShape() << "  ==>  (" << road_minx << "," << road_miny << " " << road_maxx << "," << road_maxy << ")" << std::endl;
+                    if (numRoads >= MAX_ROADS) {
+                        std::cerr << "[DataMsg] road list truncated at " << MAX_ROADS << std::endl;
+                        break;
                     }
+                        Road& road = msg.roads[numRoads];
+                        road = Road();
 
-                    // Send only the link contained inside the geometry set by VisServer
-                    if ((road_minx >= minx) && (road_miny <= miny) && (road_maxx <= maxx) && (road_maxy > maxy)) {
-                        Road road = Road();
-
-                        strncpy(road.roadId, link->getID().c_str(), MAX_ROAD_ID);
+                        std::memset(road.roadId, 0, sizeof(road.roadId));
+                        std::strncpy(road.roadId, link->getID().c_str(), sizeof(road.roadId) - 1);
                         msgSize += sizeof(road.roadId);
-                        roadsSize += sizeof(road.roadId);
                         //std::cout << "roadId=" << road.roadId << ", size=" << sizeof(road.roadId) << std::endl;
 
                         // =========================
@@ -350,12 +490,21 @@ namespace libsalt {
                         }
 
                         msgSize += sizeof(road.currentSignal);
-                        roadsSize += sizeof(road.currentSignal);
 
-                        road.numVehicles = numVehicles;
+                        const int encodedNumVehicles = std::min(numVehicles, static_cast<int>(MAX_VEHICLES));
+                        // Keep the actual number of vehicles on the road. Only
+                        // the per-vehicle class samples stored in vehicles[]
+                        // are capped by the fixed wire-format capacity.
+                        road.numVehicles = static_cast<unsigned int>(numVehicles);
+                        if (numVehicles > static_cast<int>(MAX_VEHICLES)) {
+                            ++truncatedClassRoads;
+                            if (static_cast<unsigned int>(numVehicles) > maxVehiclesOnRoad) {
+                                maxVehiclesOnRoad = static_cast<unsigned int>(numVehicles);
+                                maxVehiclesRoadId = link->getID();
+                            }
+                        }
 
                         msgSize += sizeof(road.numVehicles);
-                        roadsSize += sizeof(road.numVehicles);
 
                         // ===================================================
                         // Calculate size of vehicles
@@ -366,71 +515,59 @@ namespace libsalt {
                         //roadsSize += road.numVehicles * sizeof(VisVehicleClass);
                         // 2. fixed size
                         msgSize += sizeof(road.vehicles);
-                        roadsSize += sizeof(road.vehicles);
                         // ===================================================
 
                         //cout << "numVehicles=" << numVehicles << ", vehicles.size()=" << vehicles.size() << endl;
-                        for (int i = 0; i < numVehicles; i++) {
-                            std::string vehicle = vehicles[i];
-                            std::string vClass = Vehicle::getClass(vehicle);
-                            // cout << "vehicles[" << i+1 << "/" << numVehicles << "]=" << vehicles[i] << ", vclass=" << vClass << endl;
-                            if (vClass.compare("bus") == 0) {
+                        for (int i = 0; i < encodedNumVehicles; i++) {
+                            const std::string& vehicleID = vehicles[i];
+                            const auto vehicleIt = runningVehicleIndex.find(vehicleID);
+                            if (vehicleIt != runningVehicleIndex.end() &&
+                                vehicleIt->second != nullptr &&
+                                vehicleIt->second->getMyClass() == SALT::BUS) {
                                 road.vehicles[i] = VisVehicleClass::LARGE;
                             } else {
                                 road.vehicles[i] = VisVehicleClass::SMALL;
+                                if (vehicleIt == runningVehicleIndex.end()) {
+                                    ++missingVehicleIndexCount;
+                                }
                             }
                         }
 
+                        const auto speedStart = std::chrono::steady_clock::now();
                         road.speed = (unsigned int)Link::getAverageVehicleSpeed(road.roadId);
+                        averageSpeedSeconds += std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - speedStart).count();
                         msgSize += sizeof(road.speed);
-                        roadsSize += sizeof(road.speed);
                         // std::cout << "roadId=" << road.roadId << ", currentSignal=" << road.currentSignal << ", numVehicles=" << road.numVehicles << ", speed=" << road.speed << std::endl;
 
-                        roads.push_back(road);
-                        numRoads++;
+                        ++numRoads;
 
                         // TEST: only 3 roads
 //                            if (numRoads == 3) {
 //                                break;
 //                            }
-                    }
                 }
             } else {
                 // roadType == CELL
-                std::vector<SALT::CellInterface *> cells = SC->getCellList();
-                for (SALT::CellInterface* cell : cells) {
+                for (SALT::CellInterface* cell : visibleCells) {
+                    const auto vehiclesStart = std::chrono::steady_clock::now();
                     std::vector<std::string> vehicles = cell->getVehicles();
+                    getVehiclesSeconds += std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - vehiclesStart).count();
                     int numVehicles = vehicles.size();
                     if (numVehicles == 0) {
                         continue;
                     }
-
-                    // Get visualization geometry
-                    float road_minx, road_miny, road_maxx, road_maxy;
-                    {
-                        std::vector<std::string> shapes;
-                        // Use link's shape
-                        // link's shape = myFromNode->getShape() + " " + myToNode->getShape();
-                        // node's shape = std::to_string(x) + "," + std::to_string(y);
-                        std::string shapeStr = cell->getMyLink()->getShape();
-                        std::string delimiters(" ,"); // space and comma
-                        boost::split(shapes, shapeStr, boost::is_any_of(delimiters));
-
-                        // std::cout << shapes[0] << "|" << shapes[1] << "|" << shapes[shapes.size()-2] << "|" << shapes[shapes.size()-1] << std::endl;
-                        // shape: upper left(minx, miny) -> lower right(maxx, maxy)
-                        road_minx = boost::lexical_cast<float>(shapes[0]);
-                        road_miny = boost::lexical_cast<float>(shapes[1]);
-                        road_maxx = boost::lexical_cast<float>(shapes[shapes.size() - 2]);
-                        road_maxy = boost::lexical_cast<float>(shapes[shapes.size() - 1]);
+                    if (numRoads >= MAX_ROADS) {
+                        std::cerr << "[DataMsg] road list truncated at " << MAX_ROADS << std::endl;
+                        break;
                     }
+                        Road& road = msg.roads[numRoads];
+                        road = Road();
 
-                    // Send only the cells contained inside the geometry set by VisServer
-                    if ((road_minx >= minx) && (road_miny <= miny) && (road_maxx <= maxx) && (road_maxy >= maxy)) {
-                        Road road = Road();
-
-                        strncpy(road.roadId, cell->getID().c_str(), MAX_ROAD_ID);
+                        std::memset(road.roadId, 0, sizeof(road.roadId));
+                        std::strncpy(road.roadId, cell->getID().c_str(), sizeof(road.roadId) - 1);
                         msgSize += sizeof(road.roadId);
-                        roadsSize += sizeof(road.roadId);
 
                         road.currentSignal = VisSignalType::GREEN;
 
@@ -454,12 +591,21 @@ namespace libsalt {
                         }
 
                         msgSize += sizeof(road.currentSignal);
-                        roadsSize += sizeof(road.currentSignal);
 
-                        road.numVehicles = numVehicles;
+                        const int encodedNumVehicles = std::min(numVehicles, static_cast<int>(MAX_VEHICLES));
+                        // Keep the actual number of vehicles on the road. Only
+                        // the per-vehicle class samples stored in vehicles[]
+                        // are capped by the fixed wire-format capacity.
+                        road.numVehicles = static_cast<unsigned int>(numVehicles);
+                        if (numVehicles > static_cast<int>(MAX_VEHICLES)) {
+                            ++truncatedClassRoads;
+                            if (static_cast<unsigned int>(numVehicles) > maxVehiclesOnRoad) {
+                                maxVehiclesOnRoad = static_cast<unsigned int>(numVehicles);
+                                maxVehiclesRoadId = cell->getID();
+                            }
+                        }
 
                         msgSize += sizeof(road.numVehicles);
-                        roadsSize += sizeof(road.numVehicles);
 
                         // ===================================================
                         // Calculate size of vehicles
@@ -471,61 +617,82 @@ namespace libsalt {
                         msgSize += sizeof(road.vehicles);
                         // ===================================================
 
-                        for (int i = 0; i < numVehicles; i++) {
-                            std::string vehicle = vehicles[i];
-                            std::string vClass = Vehicle::getClass(vehicle);
-                            if (vClass.compare("bus") == 0) {
+                        for (int i = 0; i < encodedNumVehicles; i++) {
+                            const std::string& vehicleID = vehicles[i];
+                            const auto vehicleIt = runningVehicleIndex.find(vehicleID);
+                            if (vehicleIt != runningVehicleIndex.end() &&
+                                vehicleIt->second != nullptr &&
+                                vehicleIt->second->getMyClass() == SALT::BUS) {
                                 road.vehicles[i] = VisVehicleClass::LARGE;
                             } else {
                                 road.vehicles[i] = VisVehicleClass::SMALL;
+                                if (vehicleIt == runningVehicleIndex.end()) {
+                                    ++missingVehicleIndexCount;
+                                }
                             }
                         }
 
-                        road.speed = (unsigned int) Cell::getAverageVehicleSpeed(std::string(road.roadId));
+                        const auto speedStart = std::chrono::steady_clock::now();
+                        double speedSum = 0.0;
+                        unsigned int speedVehicleCount = 0;
+                        for (const std::string& vehicleID : vehicles) {
+                            const auto vehicleIt = runningVehicleIndex.find(vehicleID);
+                            if (vehicleIt == runningVehicleIndex.end() || vehicleIt->second == nullptr) {
+                                continue;
+                            }
+                            speedSum += vehicleIt->second->getMySpeed();
+                            ++speedVehicleCount;
+                        }
+                        road.speed = speedVehicleCount > 0
+                                ? static_cast<unsigned int>(speedSum / speedVehicleCount)
+                                : 0;
+                        averageSpeedSeconds += std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - speedStart).count();
                         msgSize += sizeof(road.speed);
-                        roadsSize += sizeof(road.speed);
                         // std::cout << "roadId=" << road.roadId << ", currentSignal=" << road.currentSignal << ", numVehicles=" << road.numVehicles << ", speed=" << road.speed << std::endl;
 
-                        roads.push_back(road);
-                        numRoads++;
-                    }
+                        ++numRoads;
                 }
             }
 
             if (numRoads > 0) {
                 msg.numRoads = numRoads;
-                msgSize += sizeof(msg.numRoads);
-
-                // msg.roads = static_cast<struct Road *>(malloc(roadsSize));
-                // cout << "msgSize=" << msgSize << ", roadsSize=" << roadsSize << endl;
-                for (int i = 0; i < numRoads; i++) {
-                    msg.roads[i] = roads[i];
-/*
-                            Road r = msg.roads[i];
-                            std::string cls;
-                            for (int j = 0; j < r.numVehicles; j++) {
-                                VisVehicleClass c = r.vehicles[j];
-                                if (c == VisVehicleClass::SMALL) {
-                                    cls += "s";
-                                } else {
-                                    cls += "L";
-                                }
-                            }
-
-                            cout << "[" << r.roadId << "] numVehicles=" << r.numVehicles << ", speed=" << r.speed << ", class=(" << cls << ")" << endl;
-*/
-                }
+                // Use the packed wire-layout size directly. This avoids any
+                // drift between manual field accounting and the actual packet.
+                msgSize = static_cast<unsigned int>(
+                        sizeof(MsgHeader) + sizeof(msg.numRoads) +
+                        static_cast<std::size_t>(numRoads) * sizeof(Road));
 
                 msg.header.bodySize = msgSize - sizeof(MsgHeader);
 
-                std::cout << "[DataMsg] roadType=" << roadType << ", timestamp=" << msg.header.timestamp
-                          << ", numRoads=" << msg.numRoads << ", msgSize=" << msgSize << ", headerSize=" << sizeof(MsgHeader) << ", bodySize=" << msg.header.bodySize << std::endl;
+                const auto perfEnd = std::chrono::steady_clock::now();
+                const std::chrono::duration<double> elapsed = perfEnd - perfStart;
 
-                std::vector<boost::asio::const_buffer> buffers;
-                buffers.push_back(boost::asio::buffer(&msg, msgSize));
-                boost::asio::async_write(socket, buffers, boost::bind(&VisClient::handleWrite, this,
-                                                                      boost::asio::placeholders::error,
-                                                                      boost::asio::placeholders::bytes_transferred, buffers));
+                std::cout << std::fixed << std::setprecision(0)
+                          << "[DataMsg] roadType=" << currentRoadType << ", timestamp=" << msg.header.timestamp
+                          << ", numRoads=" << msg.numRoads << ", msgSize=" << msgSize << ", headerSize=" << sizeof(MsgHeader) << ", bodySize=" << msg.header.bodySize << std::endl;
+                std::cout << std::setprecision(6)
+                          << "[DataMsg] constructionTime=" << elapsed.count() << " sec" << std::endl;
+                std::cout << "[DataMsgPerf] candidates="
+                          << (currentRoadType == VisRoadType::LINK ? visibleLinks.size() : visibleCells.size())
+                          << ", runningVehicles=" << runningVehicleIndex.size()
+                          << ", vehicleIndexTime=" << vehicleIndexSeconds
+                          << " sec, missingClassLookups=" << missingVehicleIndexCount
+                          << ", getVehiclesTime=" << getVehiclesSeconds
+                          << " sec, averageSpeedTime=" << averageSpeedSeconds
+                          << " sec, otherTime="
+                          << std::max(0.0, elapsed.count() - vehicleIndexSeconds -
+                                             getVehiclesSeconds - averageSpeedSeconds)
+                          << " sec" << std::endl;
+
+                if (truncatedClassRoads > 0) {
+                    std::cerr << "[DataMsg] vehicle-class truncation summary: roads="
+                              << truncatedClassRoads << ", maxVehicles=" << maxVehiclesOnRoad
+                              << ", maxRoad=" << maxVehiclesRoadId
+                              << ", classLimit=" << MAX_VEHICLES << std::endl;
+                }
+
+                enqueueWrite(&msg, msgSize);
             }
         }
 
@@ -556,7 +723,8 @@ namespace libsalt {
                     msg.header.type = MSG_STATUS;
 
                     const auto p1 = std::chrono::system_clock::now();
-                    long timestamp = std::chrono::duration_cast<std::chrono::seconds>(p1.time_since_epoch()).count();
+                    long timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                            p1.time_since_epoch()).count();
                     msg.header.timestamp = timestamp;
 
                     msg.status = status;
@@ -566,16 +734,11 @@ namespace libsalt {
 
                     // std::cout << "msg.size=" << sizeof(msg) << ", header.size=" << sizeof(msg.header) << ", header.type.size=" << sizeof(msg.header.type) << ", header.timestamp.size=" << sizeof(msg.header.timestamp) << ", msg.status.size=" << sizeof(msg.status) << ", msg.progress.size=" << sizeof(msg.progress) << std::endl;
 
-                    std::cout << "[StatusMsg] timestamp=" << msg.header.timestamp << ", status=" << msg.status
+                    std::cout << std::fixed << std::setprecision(0)
+                              << "[StatusMsg] timestamp=" << msg.header.timestamp << ", status=" << msg.status
                               << ", progress=" << msg.progress << std::endl;
 
-                    std::vector<boost::asio::const_buffer> buffers;
-                    buffers.push_back(boost::asio::buffer(&msg, sizeof(MsgHeader) + msg.header.bodySize));
-
-                    boost::asio::async_write(socket, buffers,
-                                             boost::bind(&VisClient::handleWrite, this,
-                                                         boost::asio::placeholders::error,
-                                                         boost::asio::placeholders::bytes_transferred, buffers));
+                    enqueueWrite(&msg, sizeof(MsgHeader) + msg.header.bodySize);
                 }
             }
 
@@ -614,7 +777,8 @@ namespace libsalt {
         msg.header.type = MSG_STATUS;
 
         const auto p1 = std::chrono::system_clock::now();
-        long timestamp = std::chrono::duration_cast<std::chrono::seconds>(p1.time_since_epoch()).count();
+        long timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                p1.time_since_epoch()).count();
         msg.header.timestamp = timestamp;
 
         msg.status = status;
@@ -624,16 +788,62 @@ namespace libsalt {
 
         // std::cout << "msg.size=" << sizeof(msg) << ", header.size=" << sizeof(msg.header) << ", header.type.size=" << sizeof(msg.header.type) << ", header.timestamp.size=" << sizeof(msg.header.timestamp) << ", msg.status.size=" << sizeof(msg.status) << ", msg.progress.size=" << sizeof(msg.progress) << std::endl;
 
-        std::cout << "[StatusMsg] timestamp=" << msg.header.timestamp << ", status=" << msg.status
+        std::cout << std::fixed << std::setprecision(0)
+                  << "[StatusMsg] timestamp=" << msg.header.timestamp << ", status=" << msg.status
                   << ", progress=" << msg.progress << std::endl;
 
-        std::vector<boost::asio::const_buffer> buffers;
-        buffers.push_back(boost::asio::buffer(&msg, sizeof(MsgHeader) + msg.header.bodySize));
+        enqueueWrite(&msg, sizeof(MsgHeader) + msg.header.bodySize);
+    }
 
-        boost::asio::async_write(socket, buffers,
-                                 boost::bind(&VisClient::handleWrite, this,
-                                             boost::asio::placeholders::error,
-                                             boost::asio::placeholders::bytes_transferred, buffers));
+    /**
+     * Copy a packet immediately, then enqueue its write on the socket strand.
+     * The shared packet remains alive until async_write completes.
+     */
+    void VisClient::enqueueWrite(const void* source, std::size_t size) {
+        PacketPtr packet = std::make_shared<std::vector<char>>(size);
+        std::memcpy(packet->data(), source, size);
+        strand.post(boost::bind(&VisClient::enqueueWriteOnStrand, this, packet));
+    }
+
+    void VisClient::enqueueWriteOnStrand(PacketPtr packet) {
+        const bool writeInProgress = !writeQueue.empty();
+        writeQueue.push_back(packet);
+        if (!writeInProgress) {
+            startNextWrite();
+        }
+    }
+
+    void VisClient::startNextWrite() {
+        if (writeQueue.empty()) {
+            return;
+        }
+
+        PacketPtr packet = writeQueue.front();
+        boost::asio::async_write(
+                socket,
+                boost::asio::buffer(*packet),
+                strand.wrap(boost::bind(&VisClient::handleQueuedWrite,
+                                        this,
+                                        boost::asio::placeholders::error,
+                                        boost::asio::placeholders::bytes_transferred,
+                                        packet)));
+    }
+
+    void VisClient::handleQueuedWrite(const boost::system::error_code& e,
+                                      const size_t bytes_transferred,
+                                      PacketPtr packet) {
+        if (!writeQueue.empty() && writeQueue.front() == packet) {
+            writeQueue.pop_front();
+        }
+
+        if (e) {
+            std::cerr << __FUNCTION__ << "() error code: " << e.message() << std::endl;
+            writeQueue.clear();
+            return;
+        }
+
+        (void)bytes_transferred;
+        startNextWrite();
     }
 
     /**

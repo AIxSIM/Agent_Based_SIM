@@ -6,8 +6,18 @@
 #include <boost/thread.hpp>
 #include <boost/scoped_ptr.hpp>
 #include <boost/thread/scoped_thread.hpp>
+#include <atomic>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <vector>
 #include <Controller/SimulationController.h>
 #include "VisMsg.h"
+
+namespace SALT {
+    class Link;
+    class CellInterface;
+}
 
 namespace libsalt {
 
@@ -30,6 +40,23 @@ namespace libsalt {
         boost::asio::deadline_timer* statusTimer = nullptr;
         boost::asio::deadline_timer* dataTimer = nullptr;
 
+        // Serialize every socket write and keep packet storage alive until the
+        // asynchronous operation completes.
+        typedef std::shared_ptr<std::vector<char>> PacketPtr;
+        std::deque<PacketPtr> writeQueue;
+
+        // sendDataMessageInternal() can be requested from simulation steps
+        // before a previous, expensive request has completed.
+        std::atomic<bool> dataMessageRunning { false };
+
+        // SET messages update the viewport on the I/O thread while data
+        // messages can be built on a simulation thread.
+        std::mutex viewStateMutex;
+        std::atomic<unsigned long long> viewRevision { 1 };
+        unsigned long long cachedViewRevision = 0;
+        std::vector<SALT::Link*> visibleLinks;
+        std::vector<SALT::CellInterface*> visibleCells;
+
         boost::scoped_ptr<boost::thread> stop_thd;
 
         unsigned int statusSleepTime = 1;
@@ -39,13 +66,31 @@ namespace libsalt {
         char data[1024];
         std::string simulationId;
 
-        float minx = 0;
-        float miny = FLT_MAX;
-        float maxx = FLT_MAX;
-        float maxy = 0;
-        VisRoadType roadType = LINK;
+        // Default viewport for standalone/server-no-response testing.
+        // Coordinate convention used by the existing filter:
+        // minx=west, miny=north, maxx=east, maxy=south.
+        // A later SET message overrides all of these values.
+        float minx = 127.362946f;
+        float miny = 36.361378f;
+        float maxx = 127.376579f;
+        float maxy = 36.353737f;
+        VisRoadType roadType = CELL;
 
         static vector<string> tokenizeShape(const string& data, const string& dropped_delim = " ", const string& kept_delim = "");
+
+        void rebuildVisibleRoadCache(VisRoadType currentRoadType,
+                                     float currentMinx,
+                                     float currentMiny,
+                                     float currentMaxx,
+                                     float currentMaxy,
+                                     unsigned long long currentViewRevision);
+
+        void enqueueWrite(const void* data, std::size_t size);
+        void enqueueWriteOnStrand(PacketPtr packet);
+        void startNextWrite();
+        void handleQueuedWrite(const boost::system::error_code& e,
+                               const size_t bytes_transferred,
+                               PacketPtr packet);
 
     public:
         int interval = 1;

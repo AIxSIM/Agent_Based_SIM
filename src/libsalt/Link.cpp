@@ -14,6 +14,33 @@
 
 namespace libsalt {
 
+
+    SALT::EventState Link::_match_es_to_salt_es(LibsaltEventState es) {
+        if (es == LibsaltEventState::PASS) {
+            return SALT::EventState::PASS;
+        } else if (es == LibsaltEventState::RESTRICT) {
+            return SALT::EventState::RESTRICT;
+        } else if (es == LibsaltEventState::EVACUATION) {
+            return SALT::EventState::EVACUATION;
+        } else {
+            cout << "Error: Invalid Event State --> Thus, default to PASS" << endl;
+            return SALT::EventState::PASS;
+        }
+    }
+
+    LibsaltEventState Link::_match_salt_es_to_es(SALT::EventState es) {
+        if (es == SALT::EventState::PASS) {
+            return LibsaltEventState::PASS;
+        } else if (es == SALT::EventState::RESTRICT) {
+            return LibsaltEventState::RESTRICT;
+        } else if (es == SALT::EventState::EVACUATION) {
+            return LibsaltEventState::EVACUATION;
+        } else {
+            cout << "Error: Invalid Event State --> Thus, default to PASS" << endl;
+            return LibsaltEventState::PASS;
+        }
+    }
+
     // ===========================================================================
     // Getter Implementation
     // ===========================================================================
@@ -310,8 +337,15 @@ namespace libsalt {
         return Simulation::getNetworkManager()->findLinkByID(linkID)->getMyRightPocket();
     }
 
+    LibsaltEventState Link::getACState(const std::string &linkID) {
+        auto link = Simulation::getNetworkManager()->findLinkByID(linkID);
+        return _match_salt_es_to_es(link->getMyACState());
+    }
 
-
+    void Link::setACState(const std::string &linkID, LibsaltEventState es) {
+        auto link = Simulation::getNetworkManager()->findLinkByID(linkID);
+        link->setMyACState(_match_es_to_salt_es(es));
+    }
 
     // ===========================================================================
     // Setter Implementation

@@ -161,8 +161,12 @@ public:
         this->myCandidateRoutes.clear();
     }
 
-    void setMyProperty(RouteSelect _rtalgorithm) {
+    void setMyRSPreference(RouteSelect _rtalgorithm) {
         this->mySelectPref= _rtalgorithm;
+    }
+
+	RouteSelect getMyRSPreference() {
+        return this->mySelectPref;
     }
 
     map<int,map<int,tuple<SALTTime,SALTTime,SALTTime>>> getMyPassingInfo(){

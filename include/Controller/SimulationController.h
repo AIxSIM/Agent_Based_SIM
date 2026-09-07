@@ -39,7 +39,7 @@ public:
 
 	// @brief: read configuration file and load simulation env and agent
 	Result configureSimulation(string scenarioFile, string partitionID="", int option=0);
-	Result configureSimulationWithOutDirPrefix(string scenarioFile, string outdirPrefix);
+	Result configureSimulationWithOutDirPrefix(string scenarioFile, string outdirPrefix, int option=0);
     Result reconfigureSimulation(string scenarioFile, string partitionID="");
     Result reconfigureSimulationWithOutDirPrefix(string scenarioFile, string outdirPrefix);
 

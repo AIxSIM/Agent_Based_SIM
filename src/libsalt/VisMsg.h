@@ -44,7 +44,8 @@ enum VisVehicleClass : unsigned char {
 
 struct MsgHeader {
     unsigned int type; // INIT(0), DATA(1), STATUS(2), SET(10), STOP(11)
-    long timestamp; // milliseconds
+    // Keep the legacy wire protocol: signed integer Unix time in seconds.
+    long timestamp;
     unsigned int bodySize;
     template <typename Archive>
     void serialize(Archive& ar, const unsigned int version) {
@@ -108,8 +109,11 @@ struct Road {
     char roadId[MAX_ROAD_ID]; // cellId or linkId
     unsigned int speed; // road's mean speed
     VisSignalType currentSignal; // RED, GREEN
-    unsigned int numVehicles; // number of vehicles
-    VisVehicleClass vehicles[MAX_VEHICLES] = { VisVehicleClass::SMALL, }; // SMALL, LARGE
+    // Actual number of vehicles on this road. This value may be greater than
+    // MAX_VEHICLES; only the first min(numVehicles, MAX_VEHICLES) vehicle
+    // classes are represented in the fixed vehicles[] payload.
+    unsigned int numVehicles;
+    VisVehicleClass vehicles[MAX_VEHICLES] = { VisVehicleClass::SMALL, }; // sampled classes: SMALL, LARGE
     //VisVehicleClass* vehicles;
 
     template <typename Archive>

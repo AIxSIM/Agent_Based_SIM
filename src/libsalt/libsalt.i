@@ -12,6 +12,7 @@
 %rename(trafficsignal) TrafficSignal;
 %rename(vehicle) Vehicle;
 %rename(routing) Routing;
+%rename(event) Event;
 
 %pythoncode %{
 
@@ -24,11 +25,11 @@ def hasGUI():
 def close():
     simulation.close()
 
-def start(args, outdirprefix=""):
-    simulation.load(args, outdirprefix)
+def start(args, outdirprefix="", options=0, with_router=0):
+    simulation.load(args, outdirprefix, options, with_router)
 
-def load(args, outdirprefix=""):
-    simulation.load(args, outdirprefix)
+def load(args, outdirprefix="", options=0, with_router=0):
+    simulation.load(args, outdirprefix, options, with_router)
 
 def simulationStep(step=0):
     simulation.step(step)
@@ -59,8 +60,9 @@ def getEndStep():
 // replacing vector instances of standard types, see https://stackoverflow.com/questions/8469138
 %include "std_string.i"
 %include "std_vector.i"
-%include "std_map.i"
 %include "std_pair.i"
+%include "std_deque.i"
+%include "std_map.i"
 %template(StringVector) std::vector<std::string>;
 %template(IntVector) std::vector<int>;
 %template() std::map<std::string, std::string>;
@@ -90,6 +92,7 @@ def getEndStep():
 
 // Add necessary symbols to generated header
 %{
+#include <libsalt/LibsaltDefs.h>
 #include <libsalt/Simulation.h>
 #include <libsalt/Node.h>
 #include <libsalt/Link.h>
@@ -99,6 +102,7 @@ def getEndStep():
 #include <libsalt/Vehicle.h>
 #include <libsalt/TrafficSignal.h>
 #include <libsalt/Routing.h>
+#include <libsalt/Event.h>
 %}
 
 // Process symbols in header
@@ -112,3 +116,5 @@ def getEndStep():
 %include "Vehicle.h"
 %include "TrafficSignal.h"
 %include "Routing.h"
+%include "Event.h"
+

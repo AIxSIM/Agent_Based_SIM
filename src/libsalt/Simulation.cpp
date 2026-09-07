@@ -5,6 +5,7 @@
 #include <cstring>
 #include <utils/config.h>
 #include <utils/etc.h>
+#include <boost/filesystem.hpp>
 
 #include "LibsaltDefs.h"
 #include "Simulation.h"
@@ -28,10 +29,10 @@ namespace libsalt {
     // static member definitions
     // ===========================================================================
 
-    void Simulation::_load(std::string argv, std::string outdir_prefix) {
+    void Simulation::_load_with_outdir_prefix(int options) {
         // Create simulation controller
         SC = new SALT::SimulationController();
-        SALT::Result configResult = SC->configureSimulationWithOutDirPrefix(scenarioFile,outdirPrefix);
+        SALT::Result configResult = SC->configureSimulationWithOutDirPrefix(scenarioFile,outdirPrefix, options);
         if (configResult == SALT::FAILURE) {
             std::cerr << "--- Error: Configuration Failed ---" << std::endl;
             return;
@@ -64,9 +65,51 @@ namespace libsalt {
         SC->assertReady();
     }
 
-    void Simulation::_load(std::string argv) {
+    void Simulation::_load_with_event_option(int options, int with_router) {
         // Create simulation controller
         SC = new SALT::SimulationController();
+
+        SALT::Result configResult = SC->configureSimulation(scenarioFile, "", options);
+        if (configResult == SALT::FAILURE) {
+            std::cerr << "--- Error: Configuration Failed ---" << std::endl;
+            return;
+        }
+        cout << "--- Configuration Done ---" << endl;
+
+        if (with_router == 1) {
+            setConfigForRouting();
+        }
+
+        SC->printSimulationSetting();
+
+        // #define RENDER
+        #ifdef RENDER
+        render()
+        #endif
+
+        // ===========================================
+        // Start TCP server
+        // master's host and port
+        string host = SC->getScenarioInfo()->simhost;
+        int port = SC->getScenarioInfo()->simport;
+        int interval = SC->getScenarioInfo()->siminterval;
+        if (port != 0) {
+            VC = new VisClient(SC, host, port);
+            VC->interval = interval;
+            VC->start();
+        }
+        // ===========================================
+
+        // Run simulation
+        timeStart = Clock::now();
+        std::cout << "[Simulation Start]" << std::endl;
+        SC->assertReady();
+    }
+
+    void Simulation::_load(int with_router) {
+        // Create simulation controller
+        SC = new SALT::SimulationController();
+
         SALT::Result configResult = SC->configureSimulation(scenarioFile);
         if (configResult == SALT::FAILURE) {
             std::cerr << "--- Error: Configuration Failed ---" << std::endl;
@@ -75,6 +118,10 @@ namespace libsalt {
 
         cout << "--- Configuration Done ---" << endl;
 
+        if (with_router == 1) {
+            setConfigForRouting();
+        }
+
         SC->printSimulationSetting();
 
         // #define RENDER
@@ -95,26 +142,41 @@ namespace libsalt {
         }
         // ===========================================
 
+        // if (with_router == 1) --> Run simulation with router
+        if (with_router == 1) {
+            RT->runData(SC);
+        }
+
         // Run simulation
         timeStart = Clock::now();
         std::cout << "[Simulation Start]" << std::endl;
         SC->assertReady();
     }
 
-    void Simulation::load(std::string argv, std::string outdir_prefix) {
+    void Simulation::load(std::string argv, std::string outdir_prefix, int options, int with_router) {
         if (argv == "") {
             std::cerr << "--- Error: Scenario File Not Specified ---" << std::endl;
             return;
-        } else if (outdir_prefix == ""){
+        }
+        if (outdir_prefix == "") {
             scenarioFile = argv;
             std::cout << "scenarioFile: " << scenarioFile << std::endl;
-            _load(scenarioFile);
+            std::cout << "event_option: " << options << std::endl;
+            std::cout << "with_router: " << with_router << std::endl;
+            if (options == 0) {
+                _load(with_router);
+            } else {
+                _load_with_event_option(options, with_router);
+            }
         } else {
+            // ToDo: in case of (outdirPrefix + eventOption (+ with_router))
             scenarioFile = argv;
             outdirPrefix = outdir_prefix;
             std::cout << "scenarioFile: " << scenarioFile << std::endl;
             std::cout << "Customized SimName: " << outdirPrefix << std::endl;
-            _load(scenarioFile, outdir_prefix);
+            std::cout << "event_option: " << options << std::endl;
+            std::cout << "with_router: " << with_router << std::endl;
+            _load_with_outdir_prefix(options);
         }
     }
 
@@ -298,15 +360,44 @@ namespace libsalt {
     }
 
     bool Simulation::setConfigForRouting() {
+        cout<<"--- Set Configuration for Router ---"<<endl;
+        cout<<"--- Scenario File: "<<scenarioFile<<endl;
         RT = new SALT::Router();
-        return RT->getConfig(scenarioFile);
+        string global_path = "";
+        vector<std::string> row = RT->split(scenarioFile, ' ');
+        for (int i = 0; i < row.size(); i++)
+        {
+            if (row[i].size() != 0)
+            {
+                vector<std::string> row2 = RT->split(row[i], '/');
+                for (int j = 0; j < row2.size() - 1; j++)
+                {
+                    global_path = global_path + row2[j] + "/";
+                }
+            }
+        }
+        cout << "-----> 전역 파일 경로 : " << global_path << endl;
+        RT->set_global_path(global_path);
+        auto ret = RT->getConfig(scenarioFile);
+        if (ret) {
+            cout << " ret = " << ret << endl;
+            int num_vertices = (int)SC->getLinkList().size();
+            RT->set_num_vertices(num_vertices);
+            cout << "--- Router Configuration Done ---" << endl;
+        } else {
+            cout << "--- Error: Fail to Configuration for Router ---" << endl;
+            exit(1);
+        }
+        return ret;
     }
 
     SALT::Router *Simulation::getRouter() {
         return RT;
     }
 
-
+    SALT::EventManager * Simulation::getEventManager() {
+        return SC->myEventManager;
+    }
 } // end of namespace libsalt
 
 /****************************************************************************/
